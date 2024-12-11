@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Object Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        #liveVideo, #annotatedImage {
+            max-width: 100%;
+            margin: 20px 0;
+        }
+        #detectionResults {
+            text-align: left;
+            margin-top: 20px;
+        }
+        .verification {
+            color: green;
+            font-weight: bold;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Object Detection</h1>
+    <label for="aicteCode">AICTE Code:</label>
+    <input type="text" id="aicteCode" placeholder="Enter AICTE Code">
+    <br><br>
+    <video id="liveVideo" autoplay playsinline width="640" height="480"></video>
+    <button id="captureButton">Capture Image</button>
+    <canvas id="captureCanvas" width="640" height="480" style="display:none;"></canvas>
+    <div id="annotatedImageContainer" style="display:none;">
+        <h2>Annotated Image</h2>
+        <img id="annotatedImage">
+    </div>
+    <div id="detectionResults"></div>
+
+    <script>
+        // Start the live video stream
+        const video = document.getElementById('liveVideo');
+        const canvas = document.getElementById('captureCanvas');
+        const captureButton = document.getElementById('captureButton');
+
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+            })
+            .catch(error => {
+                console.error('Error accessing webcam:', error);
+            });
+
+        captureButton.addEventListener('click', function() {
+            const aicteCode = document.getElementById('aicteCode').value;
+            if (!aicteCode) {
+                alert('Please enter the AICTE Code.');
+                return;
+            }
+
+            // Capture the current frame from the video
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert the captured frame to a blob
+            canvas.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('file', blob, 'capture.jpg');
+
+                // Send the image to the server for detection
+                axios.post('/detect', formData, {
+                    headers: {
+                        'Content-Type': 'multipart/form-data'
+                    }
+                })
+                .then(response => {
+                    // Display detection results
+                    const resultsDiv = document.getElementById('detectionResults');
+                    resultsDiv.innerHTML = '<h2>Detected Objects:</h2>';
+                    let verificationSuccess = false;
+
+                    response.data.detections.forEach(det => {
+                        const isSpecialObject = ["wheelchair", "whiteboard", "chair", "desk", "projector"].includes(det.class.toLowerCase());
+
+                        resultsDiv.innerHTML += `
+                            <p>
+                                <strong>Object:</strong> ${det.class}<br>
+                                <strong>Confidence:</strong> ${(det.confidence * 100).toFixed(2)}%<br>
+                                <strong>Bounding Box:</strong> 
+                                [x1: ${det.bbox[0]}, y1: ${det.bbox[1]}, 
+                                x2: ${det.bbox[2]}, y2: ${det.bbox[3]}]
+                            </p>
+                        `;
+
+                        if (isSpecialObject) {
+                            verificationSuccess = true;
+                        }
+                    });
+
+                    if (verificationSuccess) {
+                        resultsDiv.innerHTML += `<p class="verification">Verification done successfully: Classroom and specially-abled equipment detected.</p>`;
+
+                        // Update verification status in the backend
+                        axios.patch(`http://localhost:5000/api/formdata/approve/${aicteCode}`, {
+                            docApproval: true
+                        })
+                        .then(() => {
+                            resultsDiv.innerHTML += `<p class="verification">AICTE Code ${aicteCode} updated successfully.</p>`;
+                        })
+                        .catch(error => {
+                            console.error('Error updating AICTE Code:', error);
+                            resultsDiv.innerHTML += `<p class="error">Error updating verification status.</p>`;
+                        });
+                    }
+
+                    // Show annotated image
+                    const annotatedImg = document.getElementById('annotatedImage');
+                    annotatedImg.src = '/static/' + response.data.annotated_image;
+                    document.getElementById('annotatedImageContainer').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    const resultsDiv = document.getElementById('detectionResults');
+                    resultsDiv.innerHTML = '<p class="error">Failed to verify. Please try again.</p>';
+                });
+            }, 'image/jpeg');
+        });
+    </script>
+</body>
+</html>
